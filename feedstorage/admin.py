@@ -6,10 +6,10 @@ from .models import Feed, FetchStatus, Entry, Subscription
 
 
 class FeedAdmin(admin.ModelAdmin):
-    fields = ('url', 'enabled',)
-    list_display = ('id', 'url', 'nb_entries', 'enabled', 'etag',)
-    list_editable = ('url', 'enabled',)
-    search_fields = ('url', 'enabled',)
+    fields = ('url', 'enabled', 'title')
+    list_display = ('id', 'url', 'title', 'nb_entries', 'enabled', 'etag',)
+    list_editable = ('url', 'enabled', 'title')
+    search_fields = ('url', 'enabled', 'title')
     list_filter = ('enabled',)
     actions = ('fetch',)
 

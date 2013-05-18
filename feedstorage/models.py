@@ -21,15 +21,18 @@ from .utils.serializers import deserialize_function, serialize_function
 FEED_FORMAT = {
     'RSS': {
         'entries': '/rss/channel/item',
-        'id': 'guid'
+        'id': 'guid',
+        'title': '/rss/channel/title'
     },
     'Atom': {
         'entries': '/feed/entry',
-        'id': 'id'
+        'id': 'id',
+        'title': '/feed/title'
     },
 #    'RDF': {
 #        'entries': '/rdf/item',
 #        'id': 'about'
+#        'title': 'title'
 #    }
 }
 
@@ -38,6 +41,7 @@ class Feed(models.Model):
     """A Feed"""
     url = models.URLField(unique=True, db_index=True)
     etag = models.CharField(max_length=255, null=True, blank=True)
+    title = models.CharField(max_length=255, null=True, blank=True)
     # Whether it must be fetched automatically when using the ``feedstorage_fetch_all`` management command, Default: True
     enabled = models.BooleanField(default=True)
 
@@ -114,6 +118,10 @@ class Feed(models.Model):
             status.size_bytes = len(data)
 
             try:
+                title = self._get_title(data)
+                if title <> self.title:
+                    self.title = title
+                    self.save()
                 # Parse the xml and get the entries
                 entries = self._get_entries(data)
             except Exception as e:
@@ -189,6 +197,16 @@ class Feed(models.Model):
             entries = doc.xpath(v['entries'])
             if entries:
                 return entries
+        return None
+
+    def _get_title(self, xml):
+        """Get channel title."""
+        parser = etree.XMLParser(strip_cdata=False)  # Do not replace CDATA sections by normal text content (on by default)
+        doc = etree.fromstring(xml, parser=parser)
+        for k, v in FEED_FORMAT.items():
+            titles = doc.xpath(v['title'])
+            if titles:
+                return titles[0].text
         return None
 
     @classmethod
@@ -388,10 +406,11 @@ def subscription_deleted(sender, **kwargs):
 # Load the existing subscriptions when starting.
 # You must ignore the errors when syncdb is used for the first time: this is normal because the DB is not created yet
 try:
-    logger.info('[Subscriptions] - Loading existing subscriptions => init')
-    for s in Subscription.objects.all():
-        s.load()
-    logger.info('[Subscriptions] - Loading existing subscriptions => ready')
-
+    import sys
+    if ('syncdb' not in sys.argv) and ('migrate' not in sys.argv):
+        logger.info('[Subscriptions] - Loading existing subscriptions => init')
+        for s in Subscription.objects.all():
+            s.load()
+        logger.info('[Subscriptions] - Loading existing subscriptions => ready')
 except DatabaseError as err:
     logger.error('[Subscriptions] - Loading existing subscriptions => failed [KO]\n%s' % (err,))
