@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 # Python stdlib
 import hashlib
 
@@ -9,6 +11,7 @@ from django.db.models.signals import pre_delete
 
 # Third-party apps
 from lxml import etree
+import feedparser
 
 # Internal
 from .settings import USE_HTTP_COMPRESSION
@@ -20,14 +23,14 @@ from .utils.serializers import deserialize_function, serialize_function
 
 FEED_FORMAT = {
     'RSS': {
-        'entries': '/rss/channel/item',
-        'id': 'guid',
-        'title': '/rss/channel/title'
+        'entries': "/*[local-name()='rss']/*[local-name()='channel']/*[local-name()='item']",
+        'id': "*[local-name()='guid']",
+        'title': "/*[local-name()='rss']/*[local-name()='channel']/*[local-name()='title']"
     },
     'Atom': {
-        'entries': '/feed/entry',
-        'id': 'id',
-        'title': '/feed/title'
+        'entries': "/*[local-name()='feed']/*[local-name()='entry']",
+        'id': "./*[local-name()='id']",
+        'title': "/*[local-name()='feed']/*[local-name()='title']"
     },
 #    'RDF': {
 #        'entries': '/rdf/item',
@@ -118,16 +121,28 @@ class Feed(models.Model):
             status.size_bytes = len(data)
 
             try:
-                title = self._get_title(data)
-                if title <> self.title:
+                import tempfile, os
+
+                parsed_data = None
+                with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                    tmp.write(data)
+                    tmp.close()
+                    parsed_data = feedparser.parse(tmp.name)
+                    os.unlink(tmp.name)
+                    #parsed_data = feedparser.parse(unicode(data.decode('utf-8')))
+
+                title = parsed_data.feed.get('title', None)
+                ## title = self._get_title(data)
+                if (title is not None) and (title != self.title):
                     self.title = title
                     self.save()
                 # Parse the xml and get the entries
-                entries = self._get_entries(data)
+                ## entries = self._get_entries(data)
+                entries = parsed_data.entries
             except Exception as e:
                 logger.append_msg('Feed cannot be parsed.\n%s' % (e, ))
 
-            if not entries:
+            if not entries or len(entries) == 0:
                 logger.append_msg('No entries found.')
             else:  # There are entries to parse
                 status.nb_entries = len(entries)
@@ -139,18 +154,24 @@ class Feed(models.Model):
 
                 # Foreach entry, check whether it must be saved
                 for i, entry in enumerate(entries):
-                    uid = self.make_uid(entry)
+                    ## uid = self.make_uid(entry)
+                    uid = None
+                    try:
+                        entry_id = entry.get('id', entry.get('guid', entry.get('link', None)))
+                        uid = hashlib.md5(entry_id.encode('utf-8')).hexdigest()
+                    except:
                     if not uid:
                         logger.append_msg('Entry #%s: UID cannot be made.' % (i, ))
                     elif uid not in existing_entries_uid_hash:
                         try:
-                            e_xml = etree.tostring(entry, encoding=unicode)
+                            ## e_xml = etree.tostring(entry, encoding=unicode)
+                            e_xml = ''
                             new_entry = self.entry_set.create(fetch_status=status, xml=e_xml, uid_hash=uid)  # Do not use bulk_create because the size of the requests can be too big and leads to an error!
-                            new_entries.append(new_entry)
+                            ## new_entries.append(new_entry)
+                            new_entries.append([entry, new_entry])
                             existing_entries_uid_hash.append(uid)
                         except Exception as err:
                             logger.append_msg('Entry #%s cannot be parsed.\n%s' % (i, err))
-
                 status.nb_new_entries = len(new_entries)
                 if new_entries:
                     try:
@@ -187,7 +208,7 @@ class Feed(models.Model):
                 ))
 
         status.save()  # At the end to save all changes
-        return error_msg == ''  # Whether there was an error
+        return len(error_msg) == 0  # Whether there was an error
 
     def _get_entries(self, xml):
         """Get all the entries."""
