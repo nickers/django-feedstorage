@@ -12,6 +12,8 @@ from django.db.models.signals import pre_delete
 # Third-party apps
 from lxml import etree
 import feedparser
+import traceback
+import hashlib
 
 # Internal
 from .settings import USE_HTTP_COMPRESSION
@@ -88,6 +90,8 @@ class Feed(models.Model):
             try:
                 feed.fetch()
             except Exception as err:
+                traceback.print_exc()
+                print err
                 logger.error('%s - Fetching => [KO]\n%s' % (feed.log_desc, err))
 
         delta = timezone.now() - start
@@ -101,6 +105,8 @@ class Feed(models.Model):
         status = FetchStatus(feed=self)
         status.timestamp_start = timezone.now()
         status.save()  # Important to save it here because we need an ID
+
+        print '\n#', self.url
 
         try:
             # Get content
@@ -130,6 +136,8 @@ class Feed(models.Model):
                     parsed_data = feedparser.parse(tmp.name)
                     os.unlink(tmp.name)
                     #parsed_data = feedparser.parse(unicode(data.decode('utf-8')))
+                    #parsed_data = feedparser.parse(unicode(data.decode('utf-8')))
+                    #
 
                 title = parsed_data.feed.get('title', None)
                 ## title = self._get_title(data)
@@ -140,6 +148,7 @@ class Feed(models.Model):
                 ## entries = self._get_entries(data)
                 entries = parsed_data.entries
             except Exception as e:
+                traceback.print_exc()
                 logger.append_msg('Feed cannot be parsed.\n%s' % (e, ))
 
             if not entries or len(entries) == 0:
@@ -160,6 +169,7 @@ class Feed(models.Model):
                         entry_id = entry.get('id', entry.get('guid', entry.get('link', None)))
                         uid = hashlib.md5(entry_id.encode('utf-8')).hexdigest()
                     except:
+                        traceback.print_exc()
                     if not uid:
                         logger.append_msg('Entry #%s: UID cannot be made.' % (i, ))
                     elif uid not in existing_entries_uid_hash:
@@ -171,12 +181,14 @@ class Feed(models.Model):
                             new_entries.append([entry, new_entry])
                             existing_entries_uid_hash.append(uid)
                         except Exception as err:
+                            traceback.print_exc()
                             logger.append_msg('Entry #%s cannot be parsed.\n%s' % (i, err))
                 status.nb_new_entries = len(new_entries)
                 if new_entries:
                     try:
                         Subscription.notify(self, new_entries)
                     except Exception as err:
+                        traceback.print_exc()
                         logger.append_msg('New entries cannot be notified to the subscribers.\n%s' % (err,))
 
         if etag:
@@ -186,20 +198,20 @@ class Feed(models.Model):
         status.timestamp_end = timezone.now()
 
         # Log
-        log_desc = '%s - Fetching' % (self.log_desc,)
+        log_desc = u'%s - Fetching' % (self.log_desc,)
         error_msg = logger.flush_messages()
         if error_msg:
             # Store the file if it has been downloaded
             if data:
-                error_msg += '\n' + logger.store(data, self.url, status.timestamp_start)
+                error_msg += '\n' #+ logger.store('', self.url, status.timestamp_start)
             status.error_msg = error_msg
-            logger.error(log_desc + '\n' + error_msg)
+            logger.error(log_desc.decode('utf-8') + u'\n' + error_msg.decode('utf-8'))
         else:
             if status_code == 304:
-                logger.info('%s => 304 Feed not modified.' % (log_desc,))
+                logger.info('u%s => 304 Feed not modified.' % (log_desc,))
             else:
                 delta = status.timestamp_end - status.timestamp_start
-                logger.info('%s => %s bytes fetched in %ss. %s new entries out of %s.' % (
+                logger.info(u'%s => %s bytes fetched in %ss. %s new entries out of %s.' % (
                     log_desc,
                     status.size_bytes,
                     delta.total_seconds(),
@@ -208,7 +220,7 @@ class Feed(models.Model):
                 ))
 
         status.save()  # At the end to save all changes
-        return len(error_msg) == 0  # Whether there was an error
+        return unicode(error_msg.decode('utf-8')) == u''  # Whether there was an error
 
     def _get_entries(self, xml):
         """Get all the entries."""
